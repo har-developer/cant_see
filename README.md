@@ -1,6 +1,6 @@
 # Can't see
 
-windowsとLinuxの両方でプレイが可能です。
+WindowsとLinuxの両方でプレイが可能です。
 
 
 
@@ -14,7 +14,7 @@ windowsとLinuxの両方でプレイが可能です。
 
 ## 起動方法
 
-### windowsの場合
+### Windowsの場合
 
 1.解凍したフォルダを開きます。
 
