@@ -1,6 +1,4 @@
-#### 英語版はこちら
-
-[English README](./README_en.md)
+[English](./README_en.md) | 日本語
 
 
 
