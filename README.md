@@ -1,8 +1,10 @@
-[English README](./README_en.md)
-
 # Can't see
 
 WindowsとLinuxの両方でプレイが可能です。
+
+
+
+[English README](./README_en.md)
 
 
 
