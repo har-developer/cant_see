@@ -1,3 +1,5 @@
+English | [日本語](./README.md)
+
 # Can't see
 
 Playable on both Windows and Linux.
