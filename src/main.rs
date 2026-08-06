@@ -23,13 +23,13 @@ enum ObjectType {
 fn coords_to_18bit(x: i32, y: i32, z: i32) -> String {
     let x_bin = (x as u32) & 0x3F;
     let y_bin = (y as u32) & 0x3F;
-    let z_bin = (z as u32) & 0x3F;
+    let z_bin = ((z + 32) as u32) & 0x3F; // 負のZ座標を6bit範囲にマッピング
     format!("{:06b}{:06b}{:06b}", x_bin, y_bin, z_bin)
 }
 
 // --ダンジョン管理--
 struct Dungeon {
-    walls: HashSet<Pos>,
+    floors: HashSet<Pos>, // 通行可能な床の座標セット
     objects: HashMap<Pos, ObjectType>,
     start_pos: Pos,
     opened_doors: HashSet<Pos>,
@@ -38,7 +38,7 @@ struct Dungeon {
 impl Dungeon {
     fn new() -> Self {
         let mut dungeon = Dungeon {
-            walls: HashSet::new(),
+            floors: HashSet::new(),
             objects: HashMap::new(),
             start_pos: (0, 0, -3),
             opened_doors: HashSet::new(),
@@ -64,13 +64,32 @@ impl Dungeon {
             for (x_idx, ch) in line.chars().enumerate() {
                 let pos = (x_idx as i32, y_idx as i32, z);
                 match ch {
-                    '#' => { self.walls.insert(pos); }
-                    'P' => { if z == -3 { self.start_pos = pos; } }
-                    'D' => { self.objects.insert(pos, ObjectType::Door); }
-                    'U' => { self.objects.insert(pos, ObjectType::StairsUp); }
-                    'd' => { self.objects.insert(pos, ObjectType::StairsDown); }
-                    'E' => { self.objects.insert(pos, ObjectType::Exit); }
-                    _ => {}
+                    ' ' | '.' => {
+                        self.floors.insert(pos);
+                    }
+                    'P' => {
+                        self.floors.insert(pos);
+                        if z == -3 {
+                            self.start_pos = pos;
+                        }
+                    }
+                    'D' => {
+                        self.floors.insert(pos);
+                        self.objects.insert(pos, ObjectType::Door);
+                    }
+                    'U' => {
+                        self.floors.insert(pos);
+                        self.objects.insert(pos, ObjectType::StairsUp);
+                    }
+                    'd' => {
+                        self.floors.insert(pos);
+                        self.objects.insert(pos, ObjectType::StairsDown);
+                    }
+                    'E' => {
+                        self.floors.insert(pos);
+                        self.objects.insert(pos, ObjectType::Exit);
+                    }
+                    _ => {} // '#' や定義外の文字は floors に登録しない（＝壁扱い）
                 }
             }
         }
@@ -78,7 +97,7 @@ impl Dungeon {
 
     fn is_wall(&self, x: i32, y: i32, z: i32) -> bool {
         let pos = (x, y, z);
-        if self.walls.contains(&pos) {
+        if !self.floors.contains(&pos) {
             return true;
         }
         if let Some(ObjectType::Door) = self.objects.get(&pos) {
@@ -87,6 +106,15 @@ impl Dungeon {
             }
         }
         false
+    }
+
+    fn find_object_pos(&self, target_type: ObjectType, target_z: i32) -> Option<Pos> {
+        for (pos, obj_type) in &self.objects {
+            if pos.2 == target_z && *obj_type == target_type {
+                return Some(*pos);
+            }
+        }
+        None
     }
 }
 
@@ -100,7 +128,12 @@ struct Player {
 
 impl Player {
     fn new(x: i32, y: i32, z: i32) -> Self {
-        Player { x, y, z, facing: 0 }
+        Player {
+            x,
+            y,
+            z,
+            facing: 0,
+        }
     }
 
     fn turn_right(&mut self) {
@@ -124,6 +157,7 @@ impl Player {
 struct GameEngine {
     dungeon: Dungeon,
     player: Player,
+    last_used_stairs: Option<Pos>, // 直前に使用して着地した階段の座標
 }
 
 impl GameEngine {
@@ -132,7 +166,11 @@ impl GameEngine {
         let (sx, sy, sz) = dungeon.start_pos;
         let player = Player::new(sx, sy, sz);
 
-        GameEngine { dungeon, player }
+        GameEngine {
+            dungeon,
+            player,
+            last_used_stairs: None,
+        }
     }
 
     fn print_log(&self, prefix: &str) {
@@ -180,10 +218,11 @@ impl GameEngine {
 
                 if let Some(ObjectType::Door) = self.dungeon.objects.get(&f_pos) {
                     if !self.dungeon.opened_doors.contains(&f_pos) {
-                        if self.prompt_yn("o d?[y/n] ") {
+                        if self.prompt_yn("open door?[y/n] ") {
                             self.dungeon.opened_doors.insert(f_pos);
                             self.player.x = nx;
                             self.player.y = ny;
+                            self.last_used_stairs = None; // 移動成功で階段通過フラグを解除
                             self.after_move();
                         } else {
                             let prefix = if self.check_nearby_object() { "!" } else { "" };
@@ -200,6 +239,7 @@ impl GameEngine {
                 } else {
                     self.player.x = nx;
                     self.player.y = ny;
+                    self.last_used_stairs = None; // 移動成功で階段通過フラグを解除
                     self.after_move();
                 }
             }
@@ -212,6 +252,7 @@ impl GameEngine {
                 } else {
                     self.player.x = nx;
                     self.player.y = ny;
+                    self.last_used_stairs = None; // 移動成功で階段通過フラグを解除
                     self.after_move();
                 }
             }
@@ -235,16 +276,36 @@ impl GameEngine {
         let curr_pos = (self.player.x, self.player.y, self.player.z);
         let curr_obj = self.dungeon.objects.get(&curr_pos).cloned();
 
-        // 1. 脱出（クリア）判定：オープニングと同じ緑色(\x1b[32m)で出力
+        // 1. 脱出（クリア）判定
         if let Some(ObjectType::Exit) = curr_obj {
             println!("\x1b[32m\n*** mission complete ***\x1b[0m");
             process::exit(0);
         }
 
         // 2. 階段判定
+        // 移動直後に着地した段階（last_used_stairs と同じ座標）であればプロンプトを出さずにスキップ
+        let is_just_landed = self.last_used_stairs == Some(curr_pos);
+
         if let Some(ObjectType::StairsUp) = curr_obj {
-            if self.prompt_yn("u s?[y/n] ") {
-                self.player.z += 1;
+            if !is_just_landed {
+                if self.prompt_yn("up stairs?[y/n] ") {
+                    let next_z = self.player.z + 1;
+                    let target_pos = self
+                        .dungeon
+                        .find_object_pos(ObjectType::StairsDown, next_z)
+                        .unwrap_or((self.player.x, self.player.y, next_z));
+
+                    self.player.x = target_pos.0;
+                    self.player.y = target_pos.1;
+                    self.player.z = target_pos.2;
+
+                    // 着地先の階段座標を記録
+                    self.last_used_stairs = Some(target_pos);
+
+                    let prefix = if self.check_nearby_object() { "!" } else { "" };
+                    self.print_log(prefix);
+                    return;
+                }
             }
             let prefix = if self.check_nearby_object() { "!" } else { "" };
             self.print_log(prefix);
@@ -252,8 +313,25 @@ impl GameEngine {
         }
 
         if let Some(ObjectType::StairsDown) = curr_obj {
-            if self.prompt_yn("d s?[y/n] ") {
-                self.player.z -= 1;
+            if !is_just_landed {
+                if self.prompt_yn("down stairs?[y/n] ") {
+                    let next_z = self.player.z - 1;
+                    let target_pos = self
+                        .dungeon
+                        .find_object_pos(ObjectType::StairsUp, next_z)
+                        .unwrap_or((self.player.x, self.player.y, next_z));
+
+                    self.player.x = target_pos.0;
+                    self.player.y = target_pos.1;
+                    self.player.z = target_pos.2;
+
+                    // 着地先の階段座標を記録
+                    self.last_used_stairs = Some(target_pos);
+
+                    let prefix = if self.check_nearby_object() { "!" } else { "" };
+                    self.print_log(prefix);
+                    return;
+                }
             }
             let prefix = if self.check_nearby_object() { "!" } else { "" };
             self.print_log(prefix);
@@ -268,7 +346,6 @@ impl GameEngine {
 
 // --メイン関数--
 fn main() {
-    // 起動時のタイトル画面（緑色表示）
     println!("\x1b[32mPlease escape.");
     println!();
     println!("  f : Forward");
